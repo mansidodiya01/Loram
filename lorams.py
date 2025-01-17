@@ -37,20 +37,10 @@ def check_environment_conditions():
 
     return warnings
 
-# Perform synchronous audio classification
-def classify_audio_synchronously(audio_classifier, record, buffer_size):
+# Audio result callback function
+def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int):
     global audio_result_message
-    audio_data = containers.AudioData(buffer_size, containers.AudioDataFormat(1, 16000))
-
-    # Read data from the audio recorder
-    audio_bytes = record.read(buffer_size)
-    audio_data.load_from_array(audio_bytes)
-
-    # Perform audio classification
-    result = audio_classifier.classify(audio_data)
-    print(f"Audio Classification Result: {result}")  # Debugging output
-
-    # Parse the result
+    print(f"Audio Callback Triggered: {result}")  # Debugging the callback
     if result.classifications:
         for category in result.classifications[0].categories:
             print(f"Category: {category.category_name}, Score: {category.score}")  # Debugging
@@ -79,7 +69,7 @@ def process_frame(ncnn_model, frame):
 
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected.{warnings}"
+        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
     else:
         return "Baby is not there."
 
@@ -96,9 +86,10 @@ def main():
     base_options = python.BaseOptions(model_asset_path=audio_model_path)
     options = audio.AudioClassifierOptions(
         base_options=base_options,
-        running_mode=audio.RunningMode.AUDIO_CLIP,  # Change to synchronous mode
+        running_mode=audio.RunningMode.AUDIO_STREAM,  # Use stream mode
         max_results=5,
         score_threshold=0.3,
+        result_callback=audio_result_callback  # Attach the callback function
     )
     audio_classifier = audio.AudioClassifier.create_from_options(options)
 
@@ -133,9 +124,6 @@ def main():
 
         # Process frame
         frame_result = process_frame(ncnn_model, frame)
-
-        # Perform synchronous audio classification
-        classify_audio_synchronously(audio_classifier, record, buffer_size)
 
         # Combine results
         combined_message = f"Audio: {audio_result_message} | Frame: {frame_result}"
