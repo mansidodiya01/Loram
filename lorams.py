@@ -12,6 +12,9 @@ import serial
 # Set up LoRa communication
 lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your setup
 
+# Shared variable for audio results
+audio_result_message = ""
+
 # Function to send messages via LoRa
 def send_via_lora(message):
     if lora_serial.is_open:
@@ -34,20 +37,25 @@ def check_environment_conditions():
 
     return warnings
 
-# Result callback for audio classification
-def process_audio(audio_classifier, record, buffer_size):
-    data = record.read(buffer_size)
-    audio_data = containers.AudioData(buffer_size, containers.AudioDataFormat(1, 16000))
-    audio_data.load_from_array(data)
-    result = audio_classifier.classify(audio_data)
+# Audio result callback function
+def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int):
+    global audio_result_message
+    detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+    message = f"{detected_time} - "
 
     detected = False
     for category in result.classifications[0].categories:
         if ("baby cry" in category.category_name.lower() or
             "infant cry" in category.category_name.lower()):
-            return "Your baby is crying."
+            message += "Your baby is crying."
+            detected = True
+            break
 
-    return "Baby is not crying."
+    if not detected:
+        message += "Baby is not crying."
+
+    # Update the global audio message
+    audio_result_message = message
 
 def process_frame(ncnn_model, frame):
     results = ncnn_model(frame)
@@ -64,9 +72,12 @@ def process_frame(ncnn_model, frame):
                 best_box = box
                 best_score = score
 
+    detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+    message = f"{detected_time} - "
+
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
+        return f"Baby is detected.{warnings}"
     else:
         return "Baby is not there."
 
@@ -86,6 +97,7 @@ def main():
         running_mode=audio.RunningMode.AUDIO_STREAM,
         max_results=5,
         score_threshold=0.3,
+        result_callback=audio_result_callback  # Attach the callback function
     )
     audio_classifier = audio.AudioClassifier.create_from_options(options)
 
@@ -109,7 +121,7 @@ def main():
     while True:
         start_time = time.time()
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-        message = f"Timestamp: {timestamp} - "
+        message = f"{timestamp} - "
 
         # Capture a frame from the camera
         ret, frame = cap.read()
@@ -119,14 +131,13 @@ def main():
             send_via_lora(error_message)
             break
 
-        # Process audio and frame synchronously
-        audio_result = process_audio(audio_classifier, record, buffer_size)
+        # Process frame
         frame_result = process_frame(ncnn_model, frame)
 
         # Combine results
-        message += f"Audio: {audio_result} | Frame: {frame_result}"
-        send_via_lora(message)
-        print(message)
+        combined_message = f"Audio: {audio_result_message} | Frame: {frame_result}"
+        send_via_lora(combined_message)
+        print(combined_message)
 
         # Target ~2 FPS for synchronized processing
         elapsed_time = time.time() - start_time
