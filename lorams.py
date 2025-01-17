@@ -13,7 +13,7 @@ import serial
 lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your setup
 
 # Shared variable for audio results
-audio_result_message = ""
+audio_result_message = "No audio result yet."
 
 # Function to send messages via LoRa
 def send_via_lora(message):
@@ -56,6 +56,7 @@ def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int
 
     # Update the global audio message
     audio_result_message = message
+    print(f"Audio Result Updated: {audio_result_message}")  # Debug message
 
 def process_frame(ncnn_model, frame):
     results = ncnn_model(frame)
@@ -77,7 +78,7 @@ def process_frame(ncnn_model, frame):
 
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected.{warnings}"
+        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
     else:
         return "Baby is not there."
 
