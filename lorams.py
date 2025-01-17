@@ -74,7 +74,7 @@ def process_frame(ncnn_model, frame):
 
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
+        return f"Baby is detected.{warnings}"
     else:
         return "Baby is not there."
 
