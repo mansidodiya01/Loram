@@ -1,7 +1,6 @@
 import cv2
 import os
 import time
-import threading
 from ultralytics import YOLO
 from mediapipe.tasks import python
 from mediapipe.tasks.python.audio.core import audio_record
@@ -13,15 +12,10 @@ import serial
 # Set up LoRa communication
 lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your setup
 
-# Shared variables for synchronization
-audio_message = ""
-frame_message = ""
-lock = threading.Lock()
-
 # Function to send messages via LoRa
 def send_via_lora(message):
     if lora_serial.is_open:
-        lora_serial.write(f"{message}\n".encode('utf-8'))
+        lora_serial.write(f"{message}\n".encode("utf-8"))
 
 # Function to check temperature and humidity
 def check_environment_conditions():
@@ -33,7 +27,6 @@ def check_environment_conditions():
     if humidity is not None and temperature is not None:
         if not (20.0 <= temperature <= 25.0):
             warnings += " Warning: Temperature is outside normal range!"
-
         if not (30.0 <= humidity <= 60.0):
             warnings += " Warning: Humidity is outside normal range!"
     else:
@@ -41,86 +34,41 @@ def check_environment_conditions():
 
     return warnings
 
-# Audio processing thread
-def audio_thread(audio_classifier, record, buffer_size):
-    global audio_message
-    while True:
-        reference_time = time.monotonic_ns() // 1_000_000  # Monotonic timestamp in milliseconds
-        data = record.read(buffer_size)
-        audio_data = containers.AudioData(buffer_size, containers.AudioDataFormat(1, 16000))
-        audio_data.load_from_array(data)
+# Result callback for audio classification
+def process_audio(audio_classifier, record, buffer_size):
+    data = record.read(buffer_size)
+    audio_data = containers.AudioData(buffer_size, containers.AudioDataFormat(1, 16000))
+    audio_data.load_from_array(data)
+    result = audio_classifier.classify(audio_data)
 
-        # Process audio asynchronously
-        result = audio_classifier.classify(audio_data)
+    detected = False
+    for category in result.classifications[0].categories:
+        if ("baby cry" in category.category_name.lower() or
+            "infant cry" in category.category_name.lower()):
+            return "Your baby is crying."
 
-        # Process audio result
-        detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-        message = f"Timestamp: {detected_time} - "
+    return "Baby is not crying."
 
-        detected = False
-        for category in result.classifications[0].categories:
-            if ("baby cry" in category.category_name.lower() or
-                "infant cry" in category.category_name.lower()):
-                message += "Your baby is crying."
-                detected = True
-                break
+def process_frame(ncnn_model, frame):
+    results = ncnn_model(frame)
+    best_box = None
+    best_score = 0
 
-        if not detected:
-            message += "Baby is not crying."
+    for result in results:
+        boxes = result.boxes.xyxy.numpy()
+        scores = result.boxes.conf.numpy()
 
-        # Update shared audio_message
-        with lock:
-            audio_message = message
+        for i, box in enumerate(boxes):
+            score = scores[i]
+            if score > best_score:  # Keep the box with the highest confidence score
+                best_box = box
+                best_score = score
 
-# Frame processing thread
-def frame_thread(ncnn_model, cap):
-    global frame_message
-    while True:
-        start_time = time.time()
-
-        # Capture a frame from the camera
-        ret, frame = cap.read()
-        if not ret:
-            error_message = "Error: Unable to read frame from the camera."
-            print(error_message)
-            send_via_lora(error_message)
-            break
-
-        # Run inference on the captured frame
-        results = ncnn_model(frame)
-
-        best_box = None
-        best_score = 0
-
-        for result in results:
-            boxes = result.boxes.xyxy.numpy()
-            scores = result.boxes.conf.numpy()
-
-            for i, box in enumerate(boxes):
-                score = scores[i]
-                if score > best_score:  # Keep the box with the highest confidence score
-                    best_box = box
-                    best_score = score
-
-        detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-        message = f"Timestamp: {detected_time} - "
-
-        # Generate message based on detection
-        if best_box is not None:
-            message += f"Baby is detected with confidence {best_score:.2f}."
-            warnings = check_environment_conditions()
-            if warnings:
-                message += warnings
-        else:
-            message += "Baby is not there."
-
-        # Update shared frame_message
-        with lock:
-            frame_message = message
-
-        # Frame processing rate
-        elapsed_time = time.time() - start_time
-        time.sleep(max(0, 0.1 - elapsed_time))  # Target ~10 FPS
+    if best_box is not None:
+        warnings = check_environment_conditions()
+        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
+    else:
+        return "Baby is not there."
 
 # Main function
 def main():
@@ -153,21 +101,36 @@ def main():
         send_via_lora(error_message)
         return
 
-    # Start threads
-    threading.Thread(target=audio_thread, args=(audio_classifier, record, buffer_size), daemon=True).start()
-    threading.Thread(target=frame_thread, args=(ncnn_model, cap), daemon=True).start()
+    # Start recording audio
+    record.start_recording()
 
-    print("Starting baby detection and cry detection. Press 'q' to exit.")
+    print("Starting synchronized baby detection and cry detection. Press 'q' to exit.")
 
     while True:
-        # Combine messages from audio and frame threads
-        with lock:
-            combined_message = f"Audio: {audio_message} | Frame: {frame_message}"
+        start_time = time.time()
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+        message = f"Timestamp: {timestamp} - "
 
-        send_via_lora(combined_message)
-        print(combined_message)
+        # Capture a frame from the camera
+        ret, frame = cap.read()
+        if not ret:
+            error_message = "Error: Unable to read frame from the camera."
+            print(error_message)
+            send_via_lora(error_message)
+            break
 
-        time.sleep(0.5)
+        # Process audio and frame synchronously
+        audio_result = process_audio(audio_classifier, record, buffer_size)
+        frame_result = process_frame(ncnn_model, frame)
+
+        # Combine results
+        message += f"Audio: {audio_result} | Frame: {frame_result}"
+        send_via_lora(message)
+        print(message)
+
+        # Target ~2 FPS for synchronized processing
+        elapsed_time = time.time() - start_time
+        time.sleep(max(0, 0.5 - elapsed_time))
 
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
