@@ -39,14 +39,14 @@ def check_environment_conditions():
 
 # Audio result callback function
 def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int):
-    print(f"Callback Triggered with Result: {result}")  # Debugging output
     global audio_result_message
-    for category in result.classifications[0].categories:
-        print(f"Category: {category.category_name}, Score: {category.score}")  # Debugging each category
-        if ("baby cry" in category.category_name.lower() or
-            "infant cry" in category.category_name.lower()):
-            audio_result_message = "Baby is crying."
-            return
+    print(f"Audio Callback Triggered: {result}")  # Debugging the callback
+    if result.classifications:
+        for category in result.classifications[0].categories:
+            print(f"Category: {category.category_name}, Score: {category.score}")  # Debugging
+            if "baby cry" in category.category_name.lower():
+                audio_result_message = "Baby is crying."
+                return
     audio_result_message = "Baby is not crying."
 
 def process_frame(ncnn_model, frame):
@@ -69,7 +69,7 @@ def process_frame(ncnn_model, frame):
 
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected.{warnings}"
+        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
     else:
         return "Baby is not there."
 
@@ -106,6 +106,7 @@ def main():
         return
 
     # Start recording audio
+    print("Starting audio recording...")
     record.start_recording()
 
     print("Starting synchronized baby detection and cry detection. Press 'q' to exit.")
