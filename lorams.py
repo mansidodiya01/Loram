@@ -13,7 +13,7 @@ import serial
 lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your setup
 
 # Shared variable for audio results
-audio_result_message = "Baby is not crying."
+audio_result_message = "Audio classification not processed."
 
 # Function to send messages via LoRa
 def send_via_lora(message):
@@ -39,14 +39,15 @@ def check_environment_conditions():
 
 # Audio result callback function
 def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int):
+    print(f"Callback Triggered with Result: {result}")  # Debugging output
     global audio_result_message
     for category in result.classifications[0].categories:
+        print(f"Category: {category.category_name}, Score: {category.score}")  # Debugging each category
         if ("baby cry" in category.category_name.lower() or
             "infant cry" in category.category_name.lower()):
             audio_result_message = "Baby is crying."
-            break
-    else:
-        audio_result_message = "Baby is not crying."
+            return
+    audio_result_message = "Baby is not crying."
 
 def process_frame(ncnn_model, frame):
     results = ncnn_model(frame)
@@ -68,7 +69,7 @@ def process_frame(ncnn_model, frame):
 
     if best_box is not None:
         warnings = check_environment_conditions()
-        return f"Baby is detected with confidence {best_score:.2f}.{warnings}"
+        return f"Baby is detected.{warnings}"
     else:
         return "Baby is not there."
 
@@ -111,8 +112,6 @@ def main():
 
     while True:
         start_time = time.time()
-        timestamp = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-        message = f"{timestamp} - "
 
         # Capture a frame from the camera
         ret, frame = cap.read()
