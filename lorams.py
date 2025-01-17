@@ -1,18 +1,17 @@
 import cv2
-import os
 import time
+import serial
 from ultralytics import YOLO
 from mediapipe.tasks import python
 from mediapipe.tasks.python.audio.core import audio_record
 from mediapipe.tasks.python.components import containers
 from mediapipe.tasks.python import audio
 import Adafruit_DHT
-import serial
 
 # Set up LoRa communication
 lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your setup
 
-# Shared variable for audio results
+# Shared variables
 audio_result_message = "Audio classification not processed."
 
 # Function to send messages via LoRa
@@ -37,17 +36,23 @@ def check_environment_conditions():
 
     return warnings
 
-# Audio result callback function
+# Audio classification callback
 def audio_result_callback(result: audio.AudioClassifierResult, timestamp_ms: int):
     global audio_result_message
-    print(f"Audio Callback Triggered: {result}")  # Debugging the callback
-    if result.classifications:
-        for category in result.classifications[0].categories:
-            print(f"Category: {category.category_name}, Score: {category.score}")  # Debugging
-            if "baby cry" in category.category_name.lower():
-                audio_result_message = "Baby is crying."
-                return
-    audio_result_message = "Baby is not crying."
+    detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
+    detected = False
+
+    for category in result.classifications[0].categories:
+        if ("baby cry" in category.category_name.lower() or
+            "infant cry" in category.category_name.lower()) and category.score > 0.3:
+            audio_result_message = f"Baby is crying."
+            print(f"{detected_time} - Baby is crying! Detected: {category.category_name}, Confidence: {category.score:.2f}")
+            detected = True
+            break
+
+    if not detected:
+        audio_result_message = "Baby is not crying."
+        print(f"{detected_time} - No baby crying detected.")
 
 def process_frame(ncnn_model, frame):
     results = ncnn_model(frame)
@@ -60,7 +65,7 @@ def process_frame(ncnn_model, frame):
 
         for i, box in enumerate(boxes):
             score = scores[i]
-            if score > best_score:  # Keep the box with the highest confidence score
+            if score > best_score:
                 best_box = box
                 best_score = score
 
@@ -73,71 +78,69 @@ def process_frame(ncnn_model, frame):
     else:
         return "Baby is not there."
 
-# Main function
 def main():
-    # Path to the NCNN model and audio classification model
+    # Initialize YOLO model
     model_path = "best_ncnn_model"
-    audio_model_path = "yamnet.tflite"
-
-    # Initialize the YOLO model
     ncnn_model = YOLO(model_path, task="detect")
 
     # Initialize the audio classification model
+    audio_model_path = "yamnet.tflite"
     base_options = python.BaseOptions(model_asset_path=audio_model_path)
     options = audio.AudioClassifierOptions(
         base_options=base_options,
-        running_mode=audio.RunningMode.AUDIO_STREAM,  # Use stream mode
+        running_mode=audio.RunningMode.AUDIO_STREAM,
         max_results=5,
-        score_threshold=0.3,
-        result_callback=audio_result_callback  # Attach the callback function
+        score_threshold=0.8,
+        result_callback=audio_result_callback,
     )
     audio_classifier = audio.AudioClassifier.create_from_options(options)
 
-    # Initialize the audio recorder
+    # Initialize audio recorder
     buffer_size, sample_rate, num_channels = 15600, 16000, 1
+    audio_format = containers.AudioDataFormat(num_channels, sample_rate)
     record = audio_record.AudioRecord(num_channels, sample_rate, buffer_size)
+    audio_data = containers.AudioData(buffer_size, audio_format)
 
     # Open the camera stream
     cap = cv2.VideoCapture(0)
     if not cap.isOpened():
-        error_message = "Error: Unable to access the camera."
-        print(error_message)
-        send_via_lora(error_message)
+        print("Error: Unable to access the camera.")
         return
 
-    # Start recording audio
-    print("Starting audio recording...")
+    # Start audio recording
     record.start_recording()
 
-    print("Starting synchronized baby detection and cry detection. Press 'q' to exit.")
+    print("Starting synchronized detection. Press 'q' to exit.")
 
     while True:
         start_time = time.time()
 
-        # Capture a frame from the camera
+        # Process video frame
         ret, frame = cap.read()
         if not ret:
-            error_message = "Error: Unable to read frame from the camera."
-            print(error_message)
-            send_via_lora(error_message)
+            print("Error: Unable to read frame from the camera.")
             break
 
-        # Process frame
         frame_result = process_frame(ncnn_model, frame)
+
+        # Process audio input
+        data = record.read(buffer_size)
+        audio_data.load_from_array(data)
+        audio_classifier.classify_async(audio_data, time.time_ns() // 1_000_000)
 
         # Combine results
         combined_message = f"Audio: {audio_result_message} | Frame: {frame_result}"
         send_via_lora(combined_message)
         print(combined_message)
 
-        # Target ~2 FPS for synchronized processing
+        # Synchronize processing rate
         elapsed_time = time.time() - start_time
-        time.sleep(max(0, 0.5 - elapsed_time))
+        time.sleep(max(0, 0.35 - elapsed_time))  # Match ~2-3 FPS
 
+        # Exit condition
         key = cv2.waitKey(1)
         if key & 0xFF == ord('q'):
-            print("Exiting the script...")
-            send_via_lora("Exiting the script...")
+            print("Exiting...")
             break
 
     # Release resources
