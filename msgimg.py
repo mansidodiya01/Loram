@@ -15,10 +15,8 @@ lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your s
 # Directories for saving images
 image_dir = "images"
 cropped_dir = os.path.join(image_dir, "cropped")
-detected_dir = os.path.join(image_dir, "detected")
 original_dir = os.path.join(image_dir, "original")
 os.makedirs(cropped_dir, exist_ok=True)
-os.makedirs(detected_dir, exist_ok=True)
 os.makedirs(original_dir, exist_ok=True)
 
 # Shared variables
@@ -97,17 +95,14 @@ def process_frame(ncnn_model, frame):
         cropped_image = frame[y_min:y_max, x_min:x_max]
         cropped_path = os.path.join(cropped_dir, f"cropped_{int(time.time())}.jpg")
         cv2.imwrite(cropped_path, cropped_image)
-        detected_path = os.path.join(detected_dir, f"detected_{int(time.time())}.jpg")
-        cv2.rectangle(frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
-        cv2.imwrite(detected_path, frame)  # Save frame with detection box
         send_image_via_lora(cropped_path)  # Send the cropped image via LoRa
         warnings = check_environment_conditions()
         return f"Baby is detected.{warnings}"
     else:
         # Save the original image
         original_path = os.path.join(original_dir, f"original_{int(time.time())}.jpg")
-        cv2.imwrite(original_path, frame)
         send_image_via_lora(original_path)  # Send the original image via LoRa
+        cv2.imwrite(original_path, frame)
         return "Baby is not there."
 
 def main():
