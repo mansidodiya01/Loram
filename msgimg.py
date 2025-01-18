@@ -16,8 +16,10 @@ lora_serial = serial.Serial('/dev/ttyUSB0', 115200)  # Adjust the port to your s
 image_dir = "images"
 cropped_dir = os.path.join(image_dir, "cropped")
 original_dir = os.path.join(image_dir, "original")
+detected_dir = os.path.join(image_dir, "detected")
 os.makedirs(cropped_dir, exist_ok=True)
 os.makedirs(original_dir, exist_ok=True)
+os.makedirs(detected_dir, exist_ok=True)
 
 # Shared variables
 audio_result_message = "Audio classification not processed."
@@ -87,22 +89,31 @@ def process_frame(ncnn_model, frame):
                 best_score = score
 
     detected_time = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(time.time()))
-    message = f"{detected_time} - "
 
     if best_box is not None:
-        # Crop and save the image
+        # Save cropped image
         x_min, y_min, x_max, y_max = map(int, best_box)
         cropped_image = frame[y_min:y_max, x_min:x_max]
         cropped_path = os.path.join(cropped_dir, f"cropped_{int(time.time())}.jpg")
         cv2.imwrite(cropped_path, cropped_image)
-        send_image_via_lora(cropped_path)  # Send the cropped image via LoRa
+
+        # Save detected frame with bounding box
+        detected_frame = frame.copy()
+        cv2.rectangle(detected_frame, (x_min, y_min), (x_max, y_max), (0, 255, 0), 2)
+        detected_path = os.path.join(detected_dir, f"detected_{int(time.time())}.jpg")
+        cv2.imwrite(detected_path, detected_frame)
+
+        # Send cropped image via LoRa
+        send_image_via_lora(cropped_path)
+
         warnings = check_environment_conditions()
         return f"Baby is detected.{warnings}"
     else:
-        # Save the original image
+        # Save original image locally without sending
         original_path = os.path.join(original_dir, f"original_{int(time.time())}.jpg")
-        send_image_via_lora(original_path)  # Send the original image via LoRa
         cv2.imwrite(original_path, frame)
+
+        # Send only the message via LoRa
         return "Baby is not there."
 
 def main():
